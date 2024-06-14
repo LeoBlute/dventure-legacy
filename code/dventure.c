@@ -2,6 +2,15 @@
 #include <stdio.h>
 #include <gl.h>
 
+typedef struct game_state {
+   u32 AspectRatioHeight;
+   u32 AspectRatioWidth;
+   u32 Width;
+   u32 Height;
+   f32 CameraView;
+   file_data ChangedTTFData;
+} game_state;
+
 static game_context* GlobalContext;
 static game_state    GlobalState;
 
@@ -70,15 +79,25 @@ static f32 TemporalY;
 void GameLoop(game_context* Context) {
    assert(Context->AppState && Context->Input &&
           Context->TransientArena && Context->WorldArena && Context->AssetArena);
-   assert(Context->Platform->Allocate && Context->Platform->Deallocate && Context->Platform->FilesOfTypeContent && Context->Platform->FilesOfTypeChanged);
+   assert(Context->Platform->Allocate && Context->Platform->Deallocate && Context->Platform->FilesOfTypeContent && Context->Platform->FilesOfTypeData);
    GlobalContext = Context;
 
    if(!Context->AppState->Initialized) {
       GlobalContext->AppState->Initialized = TRUE;
-      GlobalContext->Platform->FilesOfTypeChanged(".pg");
    } else {
       CARRAY_FOR_EACH(C, GlobalContext->Input->Characters) {
          // printf("%c\n", C);
+      }
+      //*Unique changed id*/
+      file_data ChangedTTFData = GlobalContext->Platform->FilesOfTypeData(".ttf");
+      if(FILE_DATA_CHANGED(GlobalState.ChangedTTFData, ChangedTTFData)) {
+         GlobalState.ChangedTTFData =  ChangedTTFData;
+         buffer FillToSequence = {};
+         FillToSequence.Data = ArenaAlloc(GlobalContext->AssetArena, GlobalState.ChangedTTFData.ContentSize);
+         FillToSequence.Size = GlobalState.ChangedTTFData.ContentSize;
+         ArenaReset(GlobalContext->AssetArena);
+         GlobalContext->Platform->FilesOfTypeContent(".ttf", &FillToSequence);
+         printf("PGChanged, %ld\n", GlobalState.ChangedTTFData.ContentSize);
       }
       if(GlobalState.CameraView == 0.0f) {
          GlobalState.CameraView = 3.0f;
@@ -113,8 +132,6 @@ void GameLoop(game_context* Context) {
       rect32 DisplayArea = FitDisplayAreaToAspectRatio(GlobalState.AspectRatioWidth, GlobalState.AspectRatioHeight,
                                                        GlobalContext->AppState->Width, GlobalContext->AppState->Height);
       glViewport(DisplayArea.MinX, DisplayArea.MinY, Rect32Width(DisplayArea), Rect32Height(DisplayArea));
-      TransientAlloc(2000);
-      ResetArena(GlobalContext->TransientArena);
       glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
       glClear(GL_COLOR_BUFFER_BIT);
 

@@ -27,9 +27,13 @@ static void* ArenaAlloc(arena* Arena, u64 Size) {
    return Memory;
 }
 
-static void ResetArena(arena* Arena) {
+static void ArenaReset(arena* Arena) {
    for(u64 i=0; i<Arena->Size; i++) {
       Arena->Data[i] = 0;
    }
    Arena->AllocatedAmount = 0;
+}
+
+static u64 ArenaAvailableSize(arena* Arena) {
+   return Arena->Size - Arena->AllocatedAmount;
 }

@@ -22,21 +22,12 @@ typedef struct app_state {
    u32 Height;
 } app_state;
 
-#define PLATFORM_NO_FILES 0
 typedef struct platform_procedures {
    void* (*Allocate) (u64);
    void  (*Deallocate) (void*, u64);
-   string_sequence (*FilesOfTypeContent) (char*);
-   u64 (*FilesOfTypeChanged) (char*);
+   void (*FilesOfTypeContent) (char*, buffer*);
+   file_data (*FilesOfTypeData) (char*);
 } platform_procedures;
-
-typedef struct game_state {
-   u32 AspectRatioHeight;
-   u32 AspectRatioWidth;
-   u32 Width;
-   u32 Height;
-   f32 CameraView;
-} game_state;
 
 typedef struct game_context {
    game_input* Input;

@@ -23,7 +23,9 @@
                                            p < &(CArray.Data[CArray.Commited]); \
                                            Item = *p++)
 
-typedef struct string_sequence {
-   u64 Length;
-   char* Strings;
-} string_sequence;
+typedef struct file_data {
+   u64 ChangedID;
+   u64 ContentSize;
+} file_data;
+
+#define FILE_DATA_CHANGED(FD1, FD2) (FD1.ChangedID != FD2.ChangedID || FD1.ContentSize != FD2.ContentSize)

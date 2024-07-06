@@ -167,6 +167,7 @@ static u64 XFilesOfTypeGetContent(char* Extension, buffer* FillSequence, char* D
          struct stat FileStats = {};
          assert(fstat(FileHandle, &FileStats) != -1);
 
+         u64 FileContentSize = FileStats.st_size;
          u64 OffsetForNextContent = sizeof(u64) + strlen(FilePath) + 1 + FileStats.st_size;
          u64* U64Ptr = (u64*)(FillSequence->Data + BytesCommited);
          *U64Ptr = OffsetForNextContent;
@@ -362,7 +363,7 @@ int main() {
    EternalArena.Size = PAGES_TO_BYTES(1);
    TransientArena.Size = PAGES_TO_BYTES(2);
    WorldArena.Size = PAGES_TO_BYTES(10);
-   AssetArena.Size = PAGES_TO_BYTES(100);
+   AssetArena.Size = PAGES_TO_BYTES(5000);
 
    buffer TotalStorage = {};
    TotalStorage.Size = EternalArena.Size + TransientArena.Size + AssetArena.Size + WorldArena.Size;

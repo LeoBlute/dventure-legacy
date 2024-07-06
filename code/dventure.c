@@ -1,4 +1,12 @@
 #include "dventure.h"
+// #define STB_IMAGE_IMPLEMENTATION
+// #define STBI_NO_STDIO
+#define STB_TRUETYPE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_truetype.h"
+#include "stb_image_write.h"
+// #include "stb_image.h"
+
 #include <stdio.h>
 #include <gl.h>
 
@@ -9,6 +17,19 @@ typedef struct game_state {
    u32 Height;
    f32 CameraView;
    file_data ChangedTTFData;
+   u32 TextureHandle;
+   struct {
+      u32 GlyphCount;
+      u32 Width;
+      u32 Height;
+      stbtt_bakedchar* CharData;
+      char* Bitmap;
+      f32 Size;
+   } FontData;
+   struct {
+      b8 Active;
+      char Text[128];
+   } Console;
 } game_state;
 
 static game_context* GlobalContext;
@@ -65,16 +86,89 @@ static void DrawRectFromWorld(frect32 Rect) {
    f32 HH = DisplayRect.H * 0.5f;
    f32 X = DisplayRect.X;
    f32 Y = DisplayRect.Y;
-   glBegin(GL_TRIANGLE_STRIP);	
-   glVertex2f( X - HW, Y - HH);
-   glVertex2f( X - HW, Y + HH);
-   glVertex2f( X + HW, Y - HH);
-   glVertex2f( X + HW, Y + HH);
+
+   glEnable(GL_TEXTURE_2D);
+   glBindTexture(GL_TEXTURE_2D, GlobalState.TextureHandle);
+   glEnable(GL_BLEND);
+   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+   glBegin(GL_TRIANGLE_STRIP);
+   glTexCoord2f(0.0f, 0.0f); glVertex2f( X - HW, Y - HH); //Bottom Left
+   glTexCoord2f(0.0f, 1.0f); glVertex2f( X - HW, Y + HH); //Top Left
+   glTexCoord2f(1.0f, 0.0f); glVertex2f( X + HW, Y - HH); //Bottom Right
+   glTexCoord2f(1.0f, 1.0f); glVertex2f( X + HW, Y + HH); //Top Right
+   glEnd();
+}
+
+static void DrawText(char* Text, float X, float Y, float Size) {
+   char* TextIterator = Text;
+   u32 FontWidth = GlobalState.FontData.Width;
+   u32 FontHeight = GlobalState.FontData.Height;
+   f32 Scalator = 10.0f * GlobalState.FontData.Size;
+   X = -Scalator;
+   Y = -Scalator + (Scalator / 8.0f);
+
+   glEnable(GL_BLEND);
+   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+   glEnable(GL_TEXTURE_2D);
+   glBindTexture(GL_TEXTURE_2D, GlobalState.TextureHandle);
+   glBegin(GL_QUADS);
+   while(*TextIterator) {
+      if(*TextIterator >= 32 && *TextIterator < 128) {
+         stbtt_aligned_quad q;
+         stbtt_GetBakedQuad(GlobalState.FontData.CharData, FontWidth, FontHeight, *TextIterator-32, &X, &Y, &q, 1);
+
+         f32 x0 = q.x0 / Scalator;
+         f32 x1 = q.x1 / Scalator;
+         f32 y0 = q.y0 / Scalator;
+         f32 y1 = q.y1 / Scalator;
+         glTexCoord2f(q.s0, q.t0); glVertex2f(x0, -y0);
+         glTexCoord2f(q.s1, q.t0); glVertex2f(x1, -y0);
+         glTexCoord2f(q.s1, q.t1); glVertex2f(x1, -y1);
+         glTexCoord2f(q.s0, q.t1); glVertex2f(x0, -y1);
+      }
+      TextIterator++;
+   }
    glEnd();
 }
 
 static f32 TemporalX;
 static f32 TemporalY;
+
+FORCE_INLINE u64 ContentOffset(char* Content) {
+   return (*(u64*)(Content));
+}
+
+static buffer ContentData(buffer* ContentsBuffer, u64 Offset) {
+   buffer Result = {};
+   char* ContentNameBegin = NULL;
+   u64 ContentOffsetForNext = 0;
+   u64 ContentNameLen = 0;
+   ContentOffsetForNext = ContentOffset(ContentsBuffer->Data + Offset);
+   ContentNameBegin = (ContentsBuffer->Data + Offset + sizeof(u64));
+   ContentNameLen = strlen(ContentNameBegin);
+   Result.Data = ContentNameBegin + ContentNameLen + 1;
+   Result.Size = ContentOffsetForNext - ContentNameLen - 1 - sizeof(u64);
+   return Result;
+}
+
+/* Biggest surprise of the year was ChatGPT not being useless */
+/*void FlipBitmapVertically(unsigned char *bitmap, int width, int height) {
+    int rowSize = width; // Assuming 1 byte per pixel (GL_ALPHA)
+    unsigned char *tempRow = (unsigned char *)malloc(rowSize);
+
+    for (int y = 0; y < height / 2; ++y) {
+        unsigned char *row1 = bitmap + y * rowSize;
+        unsigned char *row2 = bitmap + (height - 1 - y) * rowSize;
+
+        // Swap row1 and row2
+        memcpy(tempRow, row1, rowSize);
+        memcpy(row1, row2, rowSize);
+        memcpy(row2, tempRow, rowSize);
+    }
+
+    free(tempRow);
+}*/
 
 void GameLoop(game_context* Context) {
    assert(Context->AppState && Context->Input &&
@@ -88,16 +182,61 @@ void GameLoop(game_context* Context) {
       CARRAY_FOR_EACH(C, GlobalContext->Input->Characters) {
          // printf("%c\n", C);
       }
-      //*Unique changed id*/
       file_data ChangedTTFData = GlobalContext->Platform->FilesOfTypeData(".ttf");
       if(FILE_DATA_CHANGED(GlobalState.ChangedTTFData, ChangedTTFData)) {
+         ArenaReset(GlobalContext->AssetArena);
+
          GlobalState.ChangedTTFData =  ChangedTTFData;
          buffer FillToSequence = {};
+
          FillToSequence.Data = ArenaAlloc(GlobalContext->AssetArena, GlobalState.ChangedTTFData.ContentSize);
          FillToSequence.Size = GlobalState.ChangedTTFData.ContentSize;
-         ArenaReset(GlobalContext->AssetArena);
          GlobalContext->Platform->FilesOfTypeContent(".ttf", &FillToSequence);
+
          printf("PGChanged, %ld\n", GlobalState.ChangedTTFData.ContentSize);
+
+         buffer RawTTFData = ContentData(&FillToSequence, ContentOffset(FillToSequence.Data));
+
+         GlobalState.FontData.Width  = 1024;
+         GlobalState.FontData.Height = 1024;
+         GlobalState.FontData.GlyphCount = 96;
+         GlobalState.FontData.Size = 96.0f;
+         GlobalState.FontData.Bitmap = ArenaAlloc(GlobalContext->AssetArena, GlobalState.FontData.Width * GlobalState.FontData.Height);
+         GlobalState.FontData.CharData = ArenaAlloc(GlobalContext->AssetArena, GlobalState.FontData.GlyphCount * sizeof(stbtt_bakedchar));
+         stbtt_BakeFontBitmap(RawTTFData.Data,
+                              0,
+                              GlobalState.FontData.Size,
+                              GlobalState.FontData.Bitmap,
+                              GlobalState.FontData.Width,
+                              GlobalState.FontData.Height,
+                              32,
+                              GlobalState.FontData.GlyphCount,
+                              GlobalState.FontData.CharData);
+
+         GLuint Texture;
+         glGenTextures(1, &Texture);
+         glBindTexture(GL_TEXTURE_2D, Texture);
+         glTexImage2D(GL_TEXTURE_2D,
+                      0,
+                      GL_ALPHA,
+                      GlobalState.FontData.Width,
+                      GlobalState.FontData.Height,
+                      0,
+                      GL_ALPHA,
+                      GL_UNSIGNED_BYTE,
+                      GlobalState.FontData.Bitmap);
+         #if 1
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+         #else
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+         #endif
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+         GlobalState.TextureHandle = Texture;
+         stbi_write_png("out.png", GlobalState.FontData.Width, GlobalState.FontData.Height, 1, GlobalState.FontData.Bitmap, GlobalState.FontData.Width);
       }
       if(GlobalState.CameraView == 0.0f) {
          GlobalState.CameraView = 3.0f;
@@ -111,16 +250,16 @@ void GameLoop(game_context* Context) {
          }
 #else
          if(GlobalContext->Input->Up) {
-            TemporalY += 0.01f;
+            TemporalY += 0.001f;
          }
          if(GlobalContext->Input->Down) {
-            TemporalY -= 0.01f;
+            TemporalY -= 0.001f;
          }
          if(GlobalContext->Input->Right) {
-            TemporalX += 0.01f;
+            TemporalX += 0.001f;
          }
          if(GlobalContext->Input->Left) {
-            TemporalX -= 0.01f;
+            TemporalX -= 0.001f;
          }
 #endif
       }
@@ -132,7 +271,7 @@ void GameLoop(game_context* Context) {
       rect32 DisplayArea = FitDisplayAreaToAspectRatio(GlobalState.AspectRatioWidth, GlobalState.AspectRatioHeight,
                                                        GlobalContext->AppState->Width, GlobalContext->AppState->Height);
       glViewport(DisplayArea.MinX, DisplayArea.MinY, Rect32Width(DisplayArea), Rect32Height(DisplayArea));
-      glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+      glClearColor(0.0f, 0.0f, 0.4f, 1.0f);
       glClear(GL_COLOR_BUFFER_BIT);
 
       glPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
@@ -152,7 +291,6 @@ void GameLoop(game_context* Context) {
       frect32 Rect = {};
       frect32 TRect = {};
 
-      glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
       Rect.X = 1.3f;
       Rect.Y = 0.1f;
       Rect.W = 1.0f;
@@ -173,5 +311,17 @@ void GameLoop(game_context* Context) {
       DrawRectFromWorld(Rect);
       glColor3f(1.0f, 0.0f, Intersect ? 1.0f : 0.0f);
       DrawRectFromWorld(TRect);
+      GlobalState.Console.Active = TRUE;
+      if(GlobalState.Console.Active) {
+         DrawText(GlobalState.Console.Text, 0.0f, 0.0f, 10.0f);
+         CARRAY_FOR_EACH(C, GlobalContext->Input->Characters) {
+            u16 len = strlen(GlobalState.Console.Text);
+            if((len + 1) < (ARRAY_LENGTH(GlobalState.Console.Text) - 1)) {
+               GlobalState.Console.Text[len] = C;
+            }
+         }
+         // if(GlobalContext.Pause)
+      }
+
    }
 }

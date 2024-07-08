@@ -41,4 +41,4 @@ typedef struct game_context {
 static void* TransientAlloc(u64 Size);
 
 typedef void (*game_loop) (game_context*);
-
+typedef void (*game_unload) (void);

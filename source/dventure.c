@@ -28,7 +28,7 @@ typedef struct game_state {
    } FontData;
    struct {
       b8 Active;
-      char Text[128];
+      char Text[16];
    } Console;
 } game_state;
 
@@ -89,8 +89,6 @@ static void DrawRectFromWorld(frect32 Rect) {
 
    glEnable(GL_TEXTURE_2D);
    glBindTexture(GL_TEXTURE_2D, GlobalState.TextureHandle);
-   glEnable(GL_BLEND);
-   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
    glBegin(GL_TRIANGLE_STRIP);
    glTexCoord2f(0.0f, 0.0f); glVertex2f( X - HW, Y - HH); //Bottom Left
@@ -152,24 +150,6 @@ static buffer ContentData(buffer* ContentsBuffer, u64 Offset) {
    return Result;
 }
 
-/* Biggest surprise of the year was ChatGPT not being useless */
-/*void FlipBitmapVertically(unsigned char *bitmap, int width, int height) {
-    int rowSize = width; // Assuming 1 byte per pixel (GL_ALPHA)
-    unsigned char *tempRow = (unsigned char *)malloc(rowSize);
-
-    for (int y = 0; y < height / 2; ++y) {
-        unsigned char *row1 = bitmap + y * rowSize;
-        unsigned char *row2 = bitmap + (height - 1 - y) * rowSize;
-
-        // Swap row1 and row2
-        memcpy(tempRow, row1, rowSize);
-        memcpy(row1, row2, rowSize);
-        memcpy(row2, tempRow, rowSize);
-    }
-
-    free(tempRow);
-}*/
-
 void GameLoop(game_context* Context) {
    assert(Context->AppState && Context->Input &&
           Context->TransientArena && Context->WorldArena && Context->AssetArena);
@@ -225,7 +205,7 @@ void GameLoop(game_context* Context) {
                       GL_ALPHA,
                       GL_UNSIGNED_BYTE,
                       GlobalState.FontData.Bitmap);
-         #if 1
+         #if 0
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
          #else
@@ -313,15 +293,23 @@ void GameLoop(game_context* Context) {
       DrawRectFromWorld(TRect);
       GlobalState.Console.Active = TRUE;
       if(GlobalState.Console.Active) {
-         DrawText(GlobalState.Console.Text, 0.0f, 0.0f, 10.0f);
          CARRAY_FOR_EACH(C, GlobalContext->Input->Characters) {
-            u16 len = strlen(GlobalState.Console.Text);
+            u64 len = strlen(GlobalState.Console.Text);
             if((len + 1) < (ARRAY_LENGTH(GlobalState.Console.Text) - 1)) {
                GlobalState.Console.Text[len] = C;
             }
+            else {
+               memset(GlobalState.Console.Text, 0, sizeof(GlobalState.Console.Text));
+            }
          }
+         glColor3f(1.0f, 0.2f, 0.3f);
+         DrawText(GlobalState.Console.Text, 0.0f, 0.0f, 10.0f);
          // if(GlobalContext.Pause)
       }
 
    }
+}
+
+void GameUnload(void) {
+   glDeleteTextures(1, &GlobalState.TextureHandle);
 }

@@ -22,7 +22,7 @@ typedef struct xgame_code {
    game_loop Loop;
    void*     DLHandle;
    u64       DLModfiedTime;
-   u64       SourceModfiedTime;
+   u64       SourceModifiedTime;
 } xgame_code;
 
 static b32
@@ -59,6 +59,10 @@ XCreateGLContext(GLXWindow*  XGLWindow,
 
 static void XUnloadGameCode(xgame_code* GameCode) {
    if(GameCode->DLHandle) {
+      game_unload GameUnload = dlsym(GameCode->DLHandle, "GameUnload");
+      assert(GameUnload);
+      GameUnload();
+
       dlclose(GameCode->DLHandle);
       GameCode->DLHandle = 0;
    }
@@ -147,9 +151,11 @@ static char* ResourcesDirectoryPath = ".";
 static u64 XFilesOfTypeGetContent(char* Extension, buffer* FillSequence, char* DirectoryPath, u64 PreviousBytesCommited) {
    assert(Extension[0] == '.');
    u64 BytesCommited = 0;
-   DIR* Directory = opendir(DirectoryPath);
-   assert(Directory);
-   struct dirent* Dirent = NULL;
+   DIR* Directory;
+   struct dirent* Dirent;
+
+   Directory = opendir(DirectoryPath);
+   assert(Directory)
 
    while((Dirent = readdir(Directory))) {
       assert(Dirent);
@@ -205,44 +211,43 @@ static u64 XFilesOfTypeGetContent(char* Extension, buffer* FillSequence, char* D
 static void XFilesOfTypeContent(char* Extension, buffer* FillSequence) {
    u64 BytesCommited = 0;
    BytesCommited = XFilesOfTypeGetContent(Extension, FillSequence, ResourcesDirectoryPath, BytesCommited);
-   /*u64 Offset = *(u64*)(FillSequence->Data);
-   printf("BC:%ld VS ES:%ld\n", BytesCommited, FillSequence->Size);
-   printf("C1:%s, C2:%s\n", FillSequence->Data + sizeof(u64), FillSequence->Data + Offset + sizeof(u64));*/
 }
+
 //Dot included
 //Refactor: Anything related to time must be chnaged
 static file_data XFilesOfTypeFindChanged(char* Extension, char* DirectoryPath, file_data PreviousTime) {
    assert(Extension[0] == '.');
+
    file_data Result = PreviousTime;
-   DIR* Directory = opendir(DirectoryPath);
+   DIR* Directory;
+   struct dirent* Dirent;
+
+   Directory = opendir(DirectoryPath);
    assert(Directory);
-   struct dirent* Dirent = NULL;
+
    while((Dirent = readdir(Directory))) {
-      assert(Dirent);
       if(Dirent->d_type == DT_REG && XIsFileOfType(Dirent->d_name, Extension)) {
-         u32 ExtensionLen = strlen(Extension);
          u32 FileNameLen = strlen(Dirent->d_name);
          u32 DirectoryPathLen = strlen(DirectoryPath);
-         char* FilePath = NULL;
-         FilePath = malloc(DirectoryPathLen + FileNameLen + 2);
-         strcpy(FilePath, DirectoryPath);
-         strcat(FilePath, "/");
-         strcat(FilePath, Dirent->d_name);
+
+         char FilePath[DirectoryPathLen + FileNameLen + 2];
+         sprintf(FilePath, "%s/%s", DirectoryPath, Dirent->d_name);
+
          const file_data FileData = XGetFileData(FilePath);
          Result.ChangedID += FileData.ChangedID;
-         Result.ContentSize += ((FileData.ContentSize) + (strlen(FilePath) + 1) + sizeof(u64));
-         free(FilePath);
-      } else if(Dirent->d_type == DT_DIR && strcmp(Dirent->d_name, ".") != 0 && strcmp(Dirent->d_name, "..") != 0) {
-         char* DirPath = NULL;
-         DirPath = malloc(strlen(Dirent->d_name) + strlen(DirectoryPath) + 2);
-         strcpy(DirPath, DirectoryPath);
-         strcat(DirPath, "/");
-         strcat(DirPath, Dirent->d_name);
+         Result.ContentSize += FileData.ContentSize + (strlen(FilePath) + 1) + sizeof(u64);
+      }
+      else if(Dirent->d_type == DT_DIR &&
+         strcmp(Dirent->d_name, ".") != 0 &&
+         strcmp(Dirent->d_name, "..") != 0
+      ) {
+         char DirPath[strlen(Dirent->d_name) + strlen(DirectoryPath) + 2];
+         sprintf(DirPath, "%s/%s", DirectoryPath, Dirent->d_name);
          Result = XFilesOfTypeFindChanged(Extension, DirPath, Result);
-         free(DirPath);
       }
    }
    closedir(Directory);
+
    return Result;
 }
 
@@ -254,10 +259,6 @@ static file_data XFilesOfTypeData(char* Extension) {
 
 int main() {
    assert(PAGES_TO_BYTES(1) == sysconf(_SC_PAGESIZE));
-   char* CodeDirectoryPath = NULL;
-#if defined(DVENTURE_CODE_PATH) && defined(DVENTURE_DEBUG)
-   CodeDirectoryPath = DVENTURE_CODE_PATH;
-#endif
 
    Display* XDisplay;
    int      XRoot;
@@ -296,7 +297,7 @@ int main() {
                               XAttributeMask, &XSetWindowAttributes);
 
    if(!XWindow) {
-      printf("Window wan't created properly\n");
+      printf("Window wasn't created properly\n");
       return 1;
    }
 
@@ -351,9 +352,30 @@ int main() {
       printf("Input Context could not be created\n");
    }
 
+   char CodeDirectoryPath[512];
+   char AbsolutePath[512] = {};
+   char GameDLPath[512] = {};
+   {
+      readlink("/proc/self/exe", AbsolutePath, sizeof(AbsolutePath));
+      char* PathEnd = AbsolutePath + strlen(AbsolutePath);
 
-   //TODO(LAG): Resolve absolute path
-   char* GameDLPath = "/home/lag/Documents/Projects/dventure/build/libdventure.so";
+      //Cut the execute "dventure" from the absolute path so that we have the absolute directory path
+      while(TRUE) {
+         *PathEnd = 0;
+         PathEnd--;
+         if(*PathEnd == '/') {
+            *PathEnd = 0;
+            break;
+         }
+      }
+
+      #pragma GCC diagnostic push
+      #pragma GCC diagnostic ignored "-Wformat-overflow"
+      sprintf(GameDLPath, "%s/libdventure.so", AbsolutePath);
+      sprintf(CodeDirectoryPath, "%s/source", AbsolutePath);
+      #pragma GCC diagnostic pop
+   }
+
    xgame_code GameCode = {};
 
    arena EternalArena = {};
@@ -374,10 +396,11 @@ int main() {
    WorldArena.Data     = TotalStorage.Data + EternalArena.Size + TransientArena.Size + AssetArena.Size;
    AssetArena.Data     = TotalStorage.Data + EternalArena.Size + TransientArena.Size;
 
-   b32 ShouldQuit = FALSE;
    app_state* AppState   = ArenaAlloc(&EternalArena, sizeof(app_state));
    game_input* GameInput = ArenaAlloc(&EternalArena, sizeof(game_input));
    platform_procedures* XProcedures = ArenaAlloc(&EternalArena, sizeof(platform_procedures));
+
+   b32 ShouldQuit = FALSE;
    while(!ShouldQuit) {
       CARRAY_ZERO(GameInput->Characters);
       b32 Initialized = ((app_state*)(EternalArena.Data))->Initialized;
@@ -422,72 +445,58 @@ int main() {
                } else if(status == XLookupChars) {
                   char v = (char)symbol;
                   CARRAY_INSERT(GameInput->Characters, v);
-                  /*char v = (char)symbol;
-                  int numBits = 32; // Calculate the number of bits in the integer type
-                  for (int i = numBits - 1; i >= 0; i--) {
-                      // Extract and print each bit
-                      printf("%d", (symbol >> i) & 1);
-                  }
-                  printf("\n");
-                  printf("%d, %c\n", symbol, v);*/
                }
             } break;
          }
       }
 
+      //Check if game code needs to be reloaded
       if(CodeDirectoryPath) {
          DIR* CodeDirectory;
+         struct dirent* Dirent;
+         u64 CurrentFilesTime;
+
          CodeDirectory = opendir(CodeDirectoryPath);
          if(!CodeDirectory) {
             printf("Error searching for the code directory\n");
             return 1;
          }
-         struct dirent* dir = NULL;
-         u64 DatesCount = 0;
-         u64 LatestDate;
 
-         while((dir = readdir(CodeDirectory)) != NULL) {
-            if(dir->d_type == DT_REG) {
-               ++DatesCount;
-            }
-         }
+         CurrentFilesTime = 0;
+         while((Dirent = readdir(CodeDirectory)) != NULL) {
+            if(Dirent->d_type == DT_REG) {
+               char FilePath[1024];
+               sprintf(FilePath, "%s/%s", CodeDirectoryPath, Dirent->d_name);
 
-         //TODO: Problably don't need this array
-         u64 DatesArray[DatesCount];
-         u32 DatesIndex = 0;
-         rewinddir(CodeDirectory);
-         while((dir = readdir(CodeDirectory)) != NULL) {
-            if(dir->d_type == DT_REG) {
-               u64 PathLength = strlen(CodeDirectoryPath) + strlen(dir->d_name) + 2;
-               char FilePath[PathLength];
-               PathLength = sprintf(FilePath, "%s/%s", CodeDirectoryPath, dir->d_name);
                struct stat FileStats = {};
                if(stat(FilePath, &FileStats) != -1) {
-                  DatesArray[DatesIndex++] = FileStats.st_mtime;
+                  if(FileStats.st_mtime > CurrentFilesTime) {
+                     CurrentFilesTime = FileStats.st_mtime;
+                  }
                } else {
+                  printf("Error! Could not get Shared Library file stats\n");
                   return 1;
                }
             }
          }
-         u64 CurrentFilesTime = 0;
-         for(int i = 0; i < DatesCount; ++i) {
-            if(DatesArray[i] > CurrentFilesTime) {
-               CurrentFilesTime = DatesArray[i];
-            }
-         }
-         if(GameCode.SourceModfiedTime != CurrentFilesTime) {
-            GameCode.SourceModfiedTime = CurrentFilesTime;
+         closedir(CodeDirectory);
+
+         if(GameCode.SourceModifiedTime != CurrentFilesTime) {
+            GameCode.SourceModifiedTime = CurrentFilesTime;
             ShouldCompileCode = TRUE;
          }
-         closedir(CodeDirectory);
       }
-      
+
       glXSwapBuffers(XDisplay, XGLWindow);
+
       if(ShouldCompileCode) {
          assert(CodeDirectoryPath);
          printf("Compiling code...\n");
-         int ret = system("gcc -O0 /home/lag/Documents/Projects/dventure/code/dventure.c -o /home/lag/Documents/Projects/dventure/build/libdventure.so -shared -fPIC -I/usr/include/GL");
+         char CompileCommand[2048];
+         sprintf(CompileCommand, "gcc -O0 %s/dventure.c -o %s/libdventure.so -shared -fPIC -I/usr/include/GL", CodeDirectoryPath, AbsolutePath);
+         int Return = system(CompileCommand);
       }
+
       u64 CurrentDLTime = XGetFileTime(GameDLPath);
       if(CurrentDLTime != GameCode.DLModfiedTime) {
          if(CurrentDLTime == 0) {
@@ -508,17 +517,20 @@ int main() {
          printf("No Game Code Available\n");
          return 1;
       }
+
       XWindowAttributes XWindowAttributes = {};
       if(XGetWindowAttributes(XDisplay, XWindow, &XWindowAttributes) == 0) {
          printf("Could not get Window Attributes\n");
          return 1;
       }
+
       AppState->Width  = XWindowAttributes.width;
       AppState->Height = XWindowAttributes.height;
       XProcedures->Allocate = XAllocate;
       XProcedures->Deallocate = XDeallocate;
       XProcedures->FilesOfTypeContent = XFilesOfTypeContent;
       XProcedures->FilesOfTypeData = XFilesOfTypeData;
+
       game_context GameContext = {};
       GameContext.AppState = AppState;
       GameContext.Input    = GameInput;
@@ -526,6 +538,7 @@ int main() {
       GameContext.TransientArena = &TransientArena;
       GameContext.WorldArena     = &WorldArena;
       GameContext.AssetArena     = &AssetArena;
+
       GameCode.Loop(&GameContext);
    }
 

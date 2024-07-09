@@ -155,7 +155,7 @@ static u64 XFilesOfTypeGetContent(char* Extension, buffer* FillSequence, char* D
    struct dirent* Dirent;
 
    Directory = opendir(DirectoryPath);
-   assert(Directory)
+   assert(Directory);
 
    while((Dirent = readdir(Directory))) {
       assert(Dirent);
@@ -257,7 +257,143 @@ static file_data XFilesOfTypeData(char* Extension) {
    return Result;
 }
 
+static u64 XSizeForAppendPath(char* Path1, char* Path2) {
+   return strlen(Path1) + strlen(Path2) + 2;
+}
+
+static void XAppendPath(char* Buffer, char* Path1, char* Path2) {
+   sprintf(Buffer, "%s/%s", Path1, Path2);
+}
+
+static u64 XFilesTypeModifiedIdRecursiveSearch(char* Extension, char* DirectoryPath) {
+   u64 Id = 0;
+
+   DIR* Directory;
+   struct dirent* Dirent;
+
+   Directory = opendir(DirectoryPath);
+   assert(Directory);
+   while((Dirent = readdir(Directory))) {
+      assert(Dirent);
+      if(Dirent->d_type == DT_REG && XIsFileOfType(Dirent->d_name, Extension)) {
+         struct stat FileStat;
+         u64 ModifiedId;
+
+         char FilePath[XSizeForAppendPath(DirectoryPath, Dirent->d_name)];
+         XAppendPath(FilePath, DirectoryPath, Dirent->d_name);
+
+         int Result = stat(FilePath, &FileStat);
+         assert(Result == 0);
+
+         ModifiedId = FileStat.st_atime + FileStat.st_mtime + FileStat.st_ctime;
+         Id += ModifiedId;
+      }
+      else if(Dirent->d_type == DT_DIR && strcmp(Dirent->d_name, ".") != 0 && strcmp(Dirent->d_name, "..") != 0){
+         char DirPath[XSizeForAppendPath(DirectoryPath, Dirent->d_name)];
+         XAppendPath(DirPath, DirectoryPath, Dirent->d_name);
+
+         Id += XFilesTypeModifiedIdRecursiveSearch(Extension, DirPath);
+      }
+   }
+   closedir(Directory);
+
+   return Id;
+}
+
+static u64 XFilesTypeModifiedId(char* Extension) {
+   u64 Id = XFilesTypeModifiedIdRecursiveSearch(Extension, ".");
+   return Id;
+}
+
+//TODO(LAG); Refactor this? it's not in critical situation, so you may just ignore it
+static b8 XFilesTypeIterateRecursive(char* DirectoryPath, char* Extension, _file_data* Data, b8* IsNextFile) {
+   DIR* Directory;
+   struct dirent* Dirent;
+
+   // b8 IsNextFile = (Data->name == NULL);
+   b8 Result = FALSE;
+
+   Directory = opendir(DirectoryPath);
+   assert(Directory);
+   while((Dirent = readdir(Directory))) {
+      assert(Dirent);
+      if(Dirent->d_type == DT_REG && XIsFileOfType(Dirent->d_name, Extension)) {
+         char FilePath[XSizeForAppendPath(DirectoryPath, Dirent->d_name)];
+         XAppendPath(FilePath, DirectoryPath, Dirent->d_name);
+
+         //Todo(LAG): Refactor this to become more readable
+         b8 IsLastIteratedFile = Data->name && strcmp(Data->name, FilePath) == 0;
+         if(IsLastIteratedFile) {
+            *IsNextFile = TRUE;
+         }
+
+         if((*IsNextFile && !IsLastIteratedFile) || !Data->name) {
+            if(Data->name) {
+               free(Data->name);
+               Data->name = NULL;
+            }
+            if(Data->content) {
+               munmap(Data->content, Data->content_size);
+               Data->content = NULL;
+            }
+            Data->name = malloc(XSizeForAppendPath(DirectoryPath, Dirent->d_name));
+            XAppendPath(Data->name, DirectoryPath, Dirent->d_name);
+
+            int FileHandle = open(Data->name, O_RDONLY);
+            struct stat FileStat;
+
+            int StatResult = fstat(FileHandle, &FileStat);
+            assert(StatResult == 0);
+
+            Data->content_size = FileStat.st_size;
+            Data->content = mmap(NULL, Data->content_size, PROT_WRITE, MAP_PRIVATE, FileHandle, 0);
+            Data->modified_id = FileStat.st_atime + FileStat.st_mtime + FileStat.st_ctime;
+
+            close(FileHandle);
+
+            Result = TRUE;
+            break;
+         }
+      } else if(Dirent->d_type == DT_DIR && strcmp(Dirent->d_name, ".") != 0 && strcmp(Dirent->d_name, "..") != 0){
+         char DirPath[XSizeForAppendPath(DirectoryPath, Dirent->d_name)];
+         XAppendPath(DirPath, DirectoryPath, Dirent->d_name);
+
+         if(XFilesTypeIterateRecursive(DirPath, Extension, Data, IsNextFile)) {
+            Result = TRUE;
+            break;
+         }
+      }
+   }
+
+   closedir(Directory);
+   return Result;
+}
+
+static b8 XFilesTypeIterate(char* Extension, _file_data* Data) {
+   b8 IsNextFile = FALSE;
+   if (XFilesTypeIterateRecursive("./resources", Extension, Data, &IsNextFile)) {
+      return TRUE;
+   }
+
+   if(Data->name) {
+      free(Data->name);
+   }
+   if(Data->content) {
+      munmap(Data->content, Data->content_size);
+   }
+
+   return FALSE;
+}
+
 int main() {
+   XFilesTypeModifiedId(".ttf");
+   for(_file_data Data = {}; XFilesTypeIterate(".ttf", &Data);) {
+      if(Data.name == NULL) {
+         printf("(NULL)\n");
+      } else {
+         printf("%s\n", Data.name);
+      }
+   }
    assert(PAGES_TO_BYTES(1) == sysconf(_SC_PAGESIZE));
 
    Display* XDisplay;

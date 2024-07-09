@@ -28,4 +28,11 @@ typedef struct file_data {
    u64 ContentSize;
 } file_data;
 
+typedef struct _file_data {
+   u64 modified_id;
+   u64 content_size;
+   char* name;
+   char* content;
+} _file_data;
+
 #define FILE_DATA_CHANGED(FD1, FD2) (FD1.ChangedID != FD2.ChangedID || FD1.ContentSize != FD2.ContentSize)
